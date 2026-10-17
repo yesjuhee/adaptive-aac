@@ -92,7 +92,7 @@ class Application:
         raise FileNotFoundError("요청한 기능을 찾을 수 없어요.")
 
 
-def make_handler(app):
+def make_handler(app, allowed_hosts=(), allowed_origins=()):
     class Handler(BaseHTTPRequestHandler):
         server_version = "AdaptiveAAC/0.1"
 
@@ -114,12 +114,12 @@ def make_handler(app):
         def dispatch(self):
             try:
                 host = self.headers.get("Host", "")
-                allowed = {f"localhost:{self.server.server_port}", f"127.0.0.1:{self.server.server_port}"}
+                allowed = {f"localhost:{self.server.server_port}", f"127.0.0.1:{self.server.server_port}", *allowed_hosts}
                 if host not in allowed:
                     self.respond(403, {"error": "로컬 주소로 접속해 주세요."})
                     return
                 origin = self.headers.get("Origin")
-                if origin and origin != f"http://{host}":
+                if origin and origin != f"http://{host}" and origin not in allowed_origins:
                     self.respond(403, {"error": "다른 사이트의 요청은 허용하지 않아요."})
                     return
                 path = urlsplit(self.path).path
@@ -163,6 +163,10 @@ def make_handler(app):
     return Handler
 
 
+def env_list(name):
+    return frozenset(item.strip() for item in os.environ.get(name, "").split(",") if item.strip())
+
+
 def main():
     load_env()
     key = os.environ.get("OPENAI_API_KEY", "")
@@ -176,8 +180,12 @@ def main():
     if not path.is_absolute():
         path = ROOT / path
     port = int(os.environ.get("AAC_PORT", "8765"))
+    # Deployment behind a reverse proxy only: localhost stays the default.
+    bind = os.environ.get("AAC_HOST", "127.0.0.1")
+    hosts = env_list("AAC_ALLOWED_HOSTS")
+    origins = env_list("AAC_ALLOWED_ORIGINS")
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(Application(Store(path), provider, local_provider)))
+        server = ThreadingHTTPServer((bind, port), make_handler(Application(Store(path), provider, local_provider), hosts, origins))
     except OSError as error:
         raise SystemExit(f"Cannot open localhost:{port}: {error}. Check local server permissions or set AAC_PORT to another port.") from None
     print(f"Adaptive AAC: http://localhost:{server.server_port}", flush=True)

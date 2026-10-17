@@ -34,13 +34,13 @@ class APITests(unittest.TestCase):
     def call(self, method, path, body=None):
         return self.app.handle(method, path, body or {}, self.profile["id"])
 
-    def http(self, path="/api/bootstrap", method="GET", body=None, headers=None):
+    def http(self, path="/api/bootstrap", method="GET", body=None, headers=None, hosts=(), origins=()):
         payload = json.dumps(body).encode() if body is not None else b""
         fields = {"Host": "localhost:8765", "Content-Type": "application/json", "Content-Length": str(len(payload)), "X-Profile-ID": self.profile["id"]}
         fields.update(headers or {})
         request = f"{method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
         connection = MemorySocket(request.encode() + payload)
-        make_handler(self.app)(connection, ("127.0.0.1", 12345), SimpleNamespace(server_port=8765))
+        make_handler(self.app, hosts, origins)(connection, ("127.0.0.1", 12345), SimpleNamespace(server_port=8765))
         head, content = connection.output.getvalue().split(b"\r\n\r\n", 1)
         return int(head.split(b" ")[1]), head.decode(), content
 
@@ -74,6 +74,13 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.http(headers={"Host": "attacker.example:8765"})[0], 403)
         self.assertEqual(self.http(path="/../.env")[0], 404)
         self.assertEqual(self.http(path="/.env")[0], 404)
+
+    def test_http_allows_only_configured_proxy_host_and_origin(self):
+        proxy = {"hosts": {"aac.example"}, "origins": {"https://aac.example"}}
+        self.assertEqual(self.http(headers={"Host": "aac.example", "Origin": "https://aac.example"}, **proxy)[0], 200)
+        self.assertEqual(self.http(headers={"Host": "aac.example"})[0], 403)
+        self.assertEqual(self.http(headers={"Host": "aac.example", "Origin": "https://attacker.example"}, **proxy)[0], 403)
+        self.assertEqual(self.http(headers={"Host": "attacker.example"}, **proxy)[0], 403)
 
     def test_http_validation_and_missing_profile(self):
         self.assertEqual(self.http(path="/api/recommend", method="POST", body={"selected": ["unknown"]})[0], 400)
